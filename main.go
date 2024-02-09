@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func main() {
@@ -32,13 +34,17 @@ func copyFiles(config *Config) error {
 		return err
 	}
 
-	err := filepath.Walk(config.sourceDirectory, func(path string, info os.FileInfo, err error) error {
+	err := filepath.WalkDir(config.sourceDirectory, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if !info.IsDir() && isTargetFileType(path, config.fileTypes) {
-			destPath := filepath.Join(config.targetDirectory, filepath.Base(path))
+		if config.isDirectoryBlacklisted(path) {
+			return filepath.SkipDir
+		}
+
+		if !d.IsDir() && config.isTargetFileType(path) {
+			destPath := filepath.Join(config.targetDirectory, d.Name())
 
 			srcFile, err := os.Open(path)
 			if err != nil {
@@ -57,6 +63,7 @@ func copyFiles(config *Config) error {
 				return err
 			}
 
+			fmt.Printf("SOURCE: %s\n", path)
 			fmt.Printf("Copied: %s\n", destPath)
 		}
 
@@ -66,9 +73,9 @@ func copyFiles(config *Config) error {
 	return err
 }
 
-func isTargetFileType(path string, targetExtensions []string) bool {
-	extension := filepath.Ext(path)
-	for _, targetExt := range targetExtensions {
+func (c *Config) isTargetFileType(path string) bool {
+	extension := strings.Replace(filepath.Ext(path), ".", "", -1)
+	for _, targetExt := range c.fileTypes {
 		if extension == targetExt {
 			return true
 		}
@@ -78,9 +85,10 @@ func isTargetFileType(path string, targetExtensions []string) bool {
 }
 
 type Config struct {
-	sourceDirectory string
-	targetDirectory string
-	fileTypes       []string
+	sourceDirectory        string
+	targetDirectory        string
+	fileTypes              []string
+	blacklistedDirectories []string
 }
 
 func getConfiguration(args []string) (*Config, error) {
@@ -94,6 +102,11 @@ func getConfiguration(args []string) (*Config, error) {
 	config.targetDirectory = args[2]
 
 	err := config.setFileTypes()
+	if err != nil {
+		return nil, err
+	}
+
+	err = config.setBlacklistedDirectories()
 	if err != nil {
 		return nil, err
 	}
@@ -119,4 +132,34 @@ func (c *Config) setFileTypes() error {
 	}
 
 	return nil
+}
+
+func (c *Config) setBlacklistedDirectories() error {
+	file, err := os.Open("./blacklistedDirectories.txt")
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		c.blacklistedDirectories = append(c.blacklistedDirectories, scanner.Text())
+	}
+
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Config) isDirectoryBlacklisted(path string) bool {
+	for _, blacklistedDirectory := range c.blacklistedDirectories {
+		if strings.Contains(path, blacklistedDirectory) {
+			return true
+		}
+	}
+
+	return false
 }
